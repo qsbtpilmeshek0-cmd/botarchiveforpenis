@@ -1,64 +1,110 @@
 # I LOVE DESH BEARCHHHHH
 import os
+import logging
+from datetime import datetime
+from aiogram import Bot, Dispatcher, types, F
+from aiogram.filters import CommandStart, Command
+from aiogram.enums import ParseMode
 import dropbox
-from telegram import Update
-from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, ContextTypes, filters
 
+# Логи
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Переменные среды
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 DROPBOX_TOKEN = os.environ.get("DROPBOX_TOKEN")
-SPECIAL_CODE = "Q_FBR_PASSPORTS/DATA.GB$04743"
-DROPBOX_FOLDER = "/passports"
 
+if not BOT_TOKEN or not DROPBOX_TOKEN:
+    raise ValueError("❌ BOT_TOKEN или DROPBOX_TOKEN отсутствуют в переменных окружения!")
+
+# Инициализация
+bot = Bot(token=BOT_TOKEN, parse_mode=ParseMode.HTML)
+dp = Dispatcher()
 dbx = dropbox.Dropbox(DROPBOX_TOKEN)
 
-async def upload_to_dropbox(local_path, remote_name):
-    with open(local_path, "rb") as f:
-        dbx.files_upload(f.read(), f"{DROPBOX_FOLDER}/{remote_name}", mode=dropbox.files.WriteMode.overwrite)
+# Папка архива
+ARCHIVE_FOLDER = "/PASSPORTS_ARCHIVE"
 
-async def list_files():
-    res = dbx.files_list_folder(DROPBOX_FOLDER)
-    return res.entries
 
-async def download_file(path, local_name):
-    _, res = dbx.files_download(path)
-    with open(local_name, "wb") as f:
-        f.write(res.content)
+# --- Проверяем и создаём папку в Dropbox ---
+def ensure_dropbox_folder():
+    try:
+        dbx.files_get_metadata(ARCHIVE_FOLDER)
+        logger.info("Папка уже существует.")
+    except dropbox.exceptions.ApiError:
+        logger.info("Папка отсутствует — создаю.")
+        dbx.files_create_folder_v2(ARCHIVE_FOLDER)
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = update.message
-    if not msg:
-        return
-    if msg.text == SPECIAL_CODE:
-        files = await list_files()
+
+ensure_dropbox_folder()
+
+
+# --- Команда /start ---
+@dp.message(CommandStart())
+async def start_cmd(message: types.Message):
+    await message.answer(
+        "👋 Привет! Я архиватор фотографий.\n"
+        "Отправь мне фото — и я сохраню его в Dropbox.\n"
+        "Команда для выдачи сохранённых фото: /get"
+    )
+
+
+# --- Сохранение фото ---
+@dp.message(F.photo)
+async def save_photo(message: types.Message):
+    try:
+        # Получаем файл
+        file_id = message.photo[-1].file_id
+        file = await bot.get_file(file_id)
+        file_bytes = await bot.download_file(file.file_path)
+
+        # Уникальное имя
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        unique_name = f"{message.from_user.id}_{timestamp}.jpg"
+
+        dropbox_path = f"{ARCHIVE_FOLDER}/{unique_name}"
+
+        # Загружаем
+        dbx.files_upload(file_bytes.read(), dropbox_path, mute=True)
+
+        await message.answer("📁 Фото успешно архивировано!")
+    except Exception as e:
+        logger.error(f"Ошибка архивации: {e}")
+        await message.answer("❌ Ошибка при сохранении фотографии.")
+
+
+# --- Выдача архивированных фото ---
+@dp.message(Command("get"))
+async def get_archived(message: types.Message):
+    try:
+        # Получаем список файлов
+        files = dbx.files_list_folder(ARCHIVE_FOLDER).entries
+
         if not files:
-            await msg.reply_text("Архив пуст.")
-            return
-        for f in files:
-            await download_file(f.path_lower, f"temp_{f.name}")
-            with open(f"temp_{f.name}", "rb") as photo_file:
-                await msg.reply_photo(photo=photo_file)
-            os.remove(f"temp_{f.name}")
-        return
-    if msg.photo:
-        try:
-            file = await msg.photo[-1].get_file()
-            file_path = f"temp_{msg.from_user.id}.jpg"
-            await file.download_to_drive(file_path)
-            remote_name = os.path.basename(file_path)
-            await upload_to_dropbox(file_path, remote_name)
-            os.remove(file_path)
-            await msg.reply_text("Архивация паспортных данных прошла успешно!✅")
-        except Exception as e:
-            await msg.reply_text(f"Что-то пошло не так на этапе архивации. Обратитесь к администратору архива @Qshka16\nОшибка: {e}")
-        return
-    await msg.reply_text("Не удалось распознать. Идите нахуй.")
+            return await message.answer("📂 Архив пуст.")
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Бот активен. Отправьте фото паспорта или спецкод.")
+        # Фильтруем только файлы конкретного пользователя
+        user_files = [f for f in files if f.name.startswith(str(message.from_user.id))]
 
+        if not user_files:
+            return await message.answer("🤷 У вас нет сохранённых фото.")
+
+        # Отправляем файлы пользователю
+        for f in user_files:
+            metadata, res = dbx.files_download(f"{ARCHIVE_FOLDER}/{f.name}")
+            await message.answer_document(types.BufferedInputFile(
+                res.content,
+                filename=f.name
+            ))
+
+    except Exception as e:
+        logger.error(f"Ошибка выдачи архива: {e}")
+        await message.answer("❌ Ошибка при выдаче архива.")
+
+
+# --- Запуск ---
 if __name__ == "__main__":
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.ALL, handle_message))
-    print("Бот запущен...")
-    app.run_polling()
+    logger.info("Бот запущен...")
+    dp.run_polling(bot)
+    
