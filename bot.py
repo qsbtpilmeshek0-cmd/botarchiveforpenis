@@ -14,7 +14,7 @@ load_dotenv()
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 DROPBOX_TOKEN = os.environ.get("DROPBOX_TOKEN")
 SECRET_CODE = "Q_FBR_PASSPORTS/DATA.GB$04743"
-PASS_FOLDER = "/RPGPassportBot"
+PASS_FOLDER = "/passports"
 
 # Инициализация
 bot = Bot(token=BOT_TOKEN)
