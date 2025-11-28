@@ -14,7 +14,7 @@ load_dotenv()
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 DROPBOX_TOKEN = os.environ.get("DROPBOX_TOKEN")
 SECRET_CODE = "Q_FBR_PASSPORTS/DATA.GB$04743"
-PASS_FOLDER = "/passports"
+PASS_FOLDER = "/RPGPassportBot"
 
 # Инициализация
 bot = Bot(token=BOT_TOKEN)
@@ -31,7 +31,7 @@ except dropbox.exceptions.ApiError:
 # Команда /start
 @dp.message(Command(commands=["start"]))
 async def cmd_start(message: types.Message):
-    await message.answer("Привет! Пришли мне фото, и я заархивирую его в Dropbox.")
+    await message.answer("Отправьте фото своего паспорта. Он будет заархивирован")
 
 # Обработка фото
 @dp.message(types.ContentType.PHOTO)
@@ -46,7 +46,7 @@ async def handle_photo(message: types.Message):
 
     try:
         dbx.files_upload(file_bytes.read(), path)
-        await message.answer(f"Фото успешно заархивировано под именем {filename}")
+        await message.answer(f"Паспорт успешно заархивирован под именем")
     except Exception as e:
         await message.answer(f"Ошибка при архивации: {e}")
 
