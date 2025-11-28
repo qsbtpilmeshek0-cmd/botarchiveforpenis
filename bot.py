@@ -1,88 +1,90 @@
-# I LOVE DESH BEARCHHHHH
+# I LOVE DESH BEARCH
 
 import os
-import logging
 import io
+import uuid
 import dropbox
 from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import Text
 from aiogram.types import FSInputFile
-from datetime import datetime
+from aiogram.filters import Command
+from dotenv import load_dotenv
+import logging
 
-# Логи
+load_dotenv()
+
+# Логирование
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Переменные окружения
-TOKEN = os.environ.get("BOT_TOKEN")
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
 DROPBOX_TOKEN = os.environ.get("DROPBOX_TOKEN")
-SECRET_CODE = "Q_FBR_PASSPORTS/DATA.GB$04743"  # Секретный код для выдачи всех фото
-PASS_FOLDER = "/passports/"
+ARCHIVE_FOLDER = "/passports"
+SECRET_CODE = "Q_FBR_PASSPORTS/DATA.GB$04743"
 
-# Инициализация бота и Dropbox
-bot = Bot(token=TOKEN)
+bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
+# Инициализация Dropbox
 dbx = dropbox.Dropbox(DROPBOX_TOKEN)
 
-# Проверка существования папки в Dropbox, создаём если нет
+# Проверка существования папки
 try:
-    dbx.files_get_metadata(PASS_FOLDER)
-    logger.info(f"Папка {PASS_FOLDER} уже существует ✅")
+    dbx.files_get_metadata(ARCHIVE_FOLDER)
+    logger.info(f"Папка {ARCHIVE_FOLDER} уже существует ✅")
 except dropbox.exceptions.ApiError:
-    dbx.files_create_folder_v2(PASS_FOLDER)
-    logger.info(f"Папка {PASS_FOLDER} создана ✅")
+    dbx.files_create_folder_v2(ARCHIVE_FOLDER)
+    logger.info(f"Создана папка {ARCHIVE_FOLDER} ✅")
 
-# Обработка фото
-@dp.message(F.content_type.in_({"photo"}))
+
+@dp.message(F.photo)
 async def handle_photo(message: types.Message):
-    photo = message.photo[-1]  # Берём фото с максимальным разрешением
-    file_info = await bot.get_file(photo.file_id)
+    file_id = message.photo[-1].file_id
+    file_info = await bot.get_file(file_id)
     file_bytes = await bot.download_file(file_info.file_path)
-
-    # Генерируем уникальное имя файла
-    timestamp = datetime.now().strftime("%Y%m%d%H%M%S%f")
-    ext = ".jpg"  # Telegram всегда присылает в формате jpg
-    filename = f"{message.from_user.id}_{timestamp}{ext}"
-    dropbox_path = PASS_FOLDER + filename
-
+    
+    # Генерация уникального имени файла
+    ext = ".jpg"
+    filename = f"{message.from_user.id}_{uuid.uuid4().hex}{ext}"
+    dropbox_path = f"{ARCHIVE_FOLDER}/{filename}"
+    
     try:
         dbx.files_upload(file_bytes.read(), dropbox_path)
-        await message.answer("Фото успешно архивировано ✅")
-        logger.info(f"Фото пользователя {message.from_user.id} сохранено как {filename}")
+        await message.reply("✅ Фото успешно заархивировано!")
     except Exception as e:
-        logger.error(f"Ошибка при сохранении фото: {e}")
-        await message.answer("Ошибка при архивировании. Обратитесь к администратору.")
+        logger.error(f"Ошибка при загрузке фото: {e}")
+        await message.reply("❌ Ошибка при архивации фото.")
 
-# Обработка текста
-@dp.message(F.content_type.in_({"text"}))
+
+@dp.message(F.text)
 async def handle_text(message: types.Message):
     text = message.text.strip()
-
+    
     if text == SECRET_CODE:
-        # Получаем все файлы из папки
+        # Выдаём все файлы из архива
         try:
-            res = dbx.files_list_folder(PASS_FOLDER)
-            if not res.entries:
-                await message.answer("Архив пустой.")
+            files = dbx.files_list_folder(ARCHIVE_FOLDER).entries
+            if not files:
+                await message.reply("Архив пуст.")
                 return
-
-            # Отправляем файлы по одному
-            for entry in res.entries:
-                if isinstance(entry, dropbox.files.FileMetadata):
-                    metadata, f = dbx.files_download(entry.path_lower)
-                    file_bytes = io.BytesIO(f.content)
-                    file_bytes.name = entry.name
-                    await message.answer_document(FSInputFile(file_bytes))
-            logger.info(f"Все файлы отправлены пользователю {message.from_user.id}")
+            
+            for f in files:
+                if isinstance(f, dropbox.files.FileMetadata):
+                    metadata, res = dbx.files_download(f.path_lower)
+                    await message.reply_document(FSInputFile(io.BytesIO(res.content), filename=f.name))
         except Exception as e:
             logger.error(f"Ошибка при выдаче архива: {e}")
-            await message.answer("Ошибка при выдаче архива. Обратитесь к администратору.")
+            await message.reply("❌ Ошибка доступа к архиву.")
     else:
-        await message.answer("Неверный код или команда.")
+        await message.reply("Неверный код или команда.")
+
+
+@dp.message(Command("start"))
+async def start(message: types.Message):
+    await message.reply("Привет! Пришли фото в формате JPG/PNG для архивации.\n"
+                        "Для получения архива используйте секретный код.")
+
 
 if __name__ == "__main__":
     import asyncio
     asyncio.run(dp.start_polling(bot))
-    
     
